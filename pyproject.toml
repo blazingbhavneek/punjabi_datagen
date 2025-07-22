@@ -5,6 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "ffmpeg>=1.4",
+    "ffprobe>=0.5",
+    "mutagen>=1.47.0",
     "pydub>=0.25.1",
     "youtube-transcript-api>=1.2.0",
     "yt-dlp>=2025.7.21",

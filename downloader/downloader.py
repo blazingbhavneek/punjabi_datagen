@@ -7,6 +7,11 @@ from youtube_transcript_api.proxies import WebshareProxyConfig
 
 PROXY_USERNAME = "agvzlcps-rotate"
 PROXY_PASSWORD = "4z9h4r1lnuaf"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(os.path.join(script_dir, "audio"), exist_ok=True)
+os.makedirs(os.path.join(script_dir, "subtitles"), exist_ok=True)
+audio_dir = os.path.join(script_dir, "audio")
+subs_dir = os.path.join(script_dir, "subtitles")
 
 def transcript_to_json(transcript, output_file):
     json_transcript = [
@@ -21,8 +26,6 @@ def transcript_to_json(transcript, output_file):
         json.dump(json_transcript, f, ensure_ascii=False, indent=4)
 
 def downloader(channel_url):
-    os.makedirs('audio', exist_ok=True)
-    os.makedirs('subtitles', exist_ok=True)
 
     ydl_opts = {
         'extract_flat': 'in_playlist',
@@ -51,7 +54,7 @@ def downloader(channel_url):
                     print(f"Found auto-generated Punjabi subtitles for {video_id}")
                     transcript = punjabi_transcript.fetch()
                     
-                    json_file = os.path.join('subtitles', f"{video_id}.json")
+                    json_file = os.path.join(subs_dir, f"{video_id}.json")
                     transcript_to_json(transcript, json_file)
                     print(f"Saved subtitles to {json_file}")
 
@@ -62,13 +65,13 @@ def downloader(channel_url):
                             'preferredcodec': 'mp3',
                             'preferredquality': '320',
                         }],
-                        'outtmpl': os.path.join('audio', f'{video_id}.%(ext)s'),
+                        'outtmpl': os.path.join(audio_dir, f'{video_id}.%(ext)s'),
                     }
                     with yt_dlp.YoutubeDL(audio_ydl_opts) as audio_ydl:
                         audio_ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
                     print(f"Downloaded audio to audio/{video_id}.mp3")
 
-                    with open('downloaded.txt', 'a') as f:
+                    with open(os.path.join(script_dir, 'downloaded.txt'), 'a') as f:
                         f.write(f"{video_id}\n")
                     break
                 else:
