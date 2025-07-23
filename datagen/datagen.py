@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import torch
+import torchaudio
 from cadence import PunctuationModel
 from ctc_forced_aligner import (generate_emissions, get_alignments, get_spans,
                                 load_alignment_model, load_audio,
@@ -17,6 +18,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 model_root = os.path.join(script_dir, "model")
 if not os.path.exists(model_root):
     os.makedirs(model_root)
+torchaudio.set_audio_backend('ffmpeg')
 
 
 def download_cadence():
@@ -60,8 +62,6 @@ def process_file(input_dir, base_name, output_dir="output"):
         model_root,
         max_length=512,
         sliding_window=True,
-        attn_implementation="flash_attention_2",
-        d_type="bfloat16" if device == "cuda" else "float32",
     )
 
     with open(csv_path, "a", encoding="utf-8", newline="") as csvfile:
@@ -196,4 +196,5 @@ def datagen(input_dir, output_dir="data"):
 if __name__ == "__main__":
     input_dir = "downloader"
     output_dir = "data"
+    download_cadence()
     datagen(input_dir, output_dir)
