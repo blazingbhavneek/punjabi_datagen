@@ -5,10 +5,20 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "black>=25.1.0",
+    "cadence-punctuation>=1.0.4",
+    "ctc-forced-aligner",
     "ffmpeg>=1.4",
     "ffprobe>=0.5",
+    "isort>=6.0.1",
     "mutagen>=1.47.0",
+    "path>=17.1.0",
     "pydub>=0.25.1",
+    "torch>=2.7.1",
+    "torchaudio>=2.7.1",
     "youtube-transcript-api>=1.2.0",
     "yt-dlp>=2025.7.21",
 ]
+
+[tool.uv.sources]
+ctc-forced-aligner = { git = "https://github.com/MahmoudAshraf97/ctc-forced-aligner.git" }

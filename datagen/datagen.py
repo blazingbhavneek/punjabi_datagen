@@ -1,80 +1,199 @@
+import csv
 import json
 import os
-import csv
+from pathlib import Path
+
+import torch
+from cadence import PunctuationModel
+from ctc_forced_aligner import (generate_emissions, get_alignments, get_spans,
+                                load_alignment_model, load_audio,
+                                postprocess_results, preprocess_text)
+from huggingface_hub import snapshot_download
 from pydub import AudioSegment
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+dtype = torch.float16 if device == "cuda" else torch.float32
 script_dir = os.path.dirname(os.path.abspath(__file__))
-punjabi_data_folder = os.path.join(script_dir, "..", "downloader")
-processed_clips_folder = os.path.join(script_dir, "..", "data", "clips")
-dataset_csv = os.path.join(script_dir, "..", "data", "dataset.csv")
-video_list_file = os.path.join(punjabi_data_folder, "downloaded.txt")
-
-os.makedirs(processed_clips_folder, exist_ok=True)
-
-def trim_silence(audio):
-    return audio.strip_silence(silence_len=500, silence_thresh=-40)
+model_root = os.path.join(script_dir, "model")
+if not os.path.exists(model_root):
+    os.makedirs(model_root)
 
 
-with open(video_list_file, 'r') as f:
-    video_ids = [line.strip() for line in f]
+def download_cadence():
+    repo_id = "ai4bharat/Cadence"
+    print(f"Downloading {repo_id} to model folder (if not already downloaded)...")
+
+    repo_path = snapshot_download(
+        repo_id=repo_id, cache_dir=model_root, local_files_only=False
+    )
+
+    print(f"Repository downloaded to: {repo_path}")
 
 
-clip_id = 1
+def build_words_info(segments):
+    """Create a mapping between words and their segments"""
+    words_info = []
+    for seg_idx, segment in enumerate(segments):
+        words = segment["text"].split()
+        for word_idx, word in enumerate(words):
+            words_info.append(
+                {
+                    "word": word,
+                    "seg_idx": seg_idx,
+                    "word_idx": word_idx,
+                    "start": segment["start"],
+                    "duration": segment["duration"],
+                }
+            )
+    return words_info
 
 
-with open(dataset_csv, 'w', newline='', encoding='utf-8') as csvfile:
-    fieldnames = ['id', 'text', 'source_video', 'duration', 'audio_file']
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    writer.writeheader()
+def process_file(input_dir, base_name, output_dir="output"):
 
-    for video_id in video_ids:
+    audio_output_dir = os.path.join(output_dir, "audio")
+    os.makedirs(audio_output_dir, exist_ok=True)
 
-        transcript_file = os.path.join(punjabi_data_folder, "subtitles", f"{video_id}.json")
-        with open(transcript_file, 'r', encoding='utf-8') as f:
-            snippets = json.load(f)
+    csv_path = os.path.join(output_dir, "sentences.csv")
+    csv_exists = os.path.exists(csv_path)
 
-        audio_file = os.path.join(punjabi_data_folder, "audio", f"{video_id}.mp3")
-        audio = AudioSegment.from_mp3(audio_file)
+    punct_model = PunctuationModel(
+        model_root,
+        max_length=512,
+        sliding_window=True,
+        attn_implementation="flash_attention_2",
+        d_type="bfloat16" if device == "cuda" else "float32",
+    )
 
-        for i in range(len(snippets) - 1):
-            snippets[i]['end'] = snippets[i + 1]['start']
-        snippets[-1]['end'] = '[EOA]'
+    with open(csv_path, "a", encoding="utf-8", newline="") as csvfile:
+        fieldnames = ["base_name", "sentence_id", "sentence_text", "audio_path"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        group_list = []
-        current_group = []
-        current_duration = 0
-        for snippet in snippets:
-            duration = snippet['duration']
-            current_group.append(snippet)
-            current_duration += duration
-            if current_duration >= 10:
-                group_list.append(current_group)
-                current_group = []
-                current_duration = 0
-        if current_group:
-            group_list.append(current_group)
+        if not csv_exists:
+            writer.writeheader()
 
-        for group in group_list:
-            start = group[0]['start']
-            end = group[-1]['end']
-            if end == '[EOA]':
-                end = group[-1]['start'] + group[-1]['duration']
-            text = " ".join([snippet['text'] for snippet in group])
+        json_path = f"{input_dir}/subtitles/{base_name}.json"
+        audio_path = f"{input_dir}/audio/{base_name}.mp3"
 
-            audio_segment = audio[start * 1000 : end * 1000]
-            trimmed_audio = trim_silence(audio_segment)
+        with open(json_path, "r", encoding="utf-8") as f:
+            segments = json.load(f)
 
-            clip_file = os.path.join(processed_clips_folder, f"clip_{clip_id}.mp3")
-            trimmed_audio.export(clip_file, format="mp3")
+        words_info = build_words_info(segments)
 
-            duration = trimmed_audio.duration_seconds
+        original_text = " ".join(segment["text"] for segment in segments)
 
-            writer.writerow({
-                'id': clip_id,
-                'text': text,
-                'source_video': video_id,
-                'duration': duration,
-                'audio_file': clip_file
-            })
+        punctuated_text = punct_model.punctuate([original_text])[0]
 
-            clip_id += 1
+        sentences = []
+        current_sentence = ""
+        for char in punctuated_text:
+            current_sentence += char
+            if char == "।":
+                sentences.append(current_sentence.strip())
+                current_sentence = ""
+        if current_sentence.strip():
+            sentences.append(current_sentence.strip())
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        audio_waveform = load_audio(audio_path, dtype=torch.float32, device=device)
+        audio_pydub = AudioSegment.from_mp3(audio_path)
+        sample_rate = 16000
+
+        word_ptr = 0
+        for sent_idx, sentence in enumerate(sentences):
+            clean_sentence = "".join(
+                c for c in sentence if c not in ".,?!;:-\"'…()।॥؟،٬᱾᱿"
+            )
+            sentence_words = clean_sentence.split()
+            n_words = len(sentence_words)
+
+            if word_ptr + n_words > len(words_info):
+                print(f"Skipping incomplete sentence: {sentence}")
+                continue
+
+            start_seg_idx = words_info[word_ptr]["seg_idx"]
+            end_seg_idx = words_info[word_ptr + n_words - 1]["seg_idx"]
+
+            start_time = segments[start_seg_idx]["start"]
+
+            last_seg = segments[end_seg_idx]
+            last_seg_words = last_seg["text"].split()
+            last_word_idx_in_seg = words_info[word_ptr + n_words - 1]["word_idx"]
+
+            if last_word_idx_in_seg == len(last_seg_words) - 1:
+                end_time = last_seg["start"] + last_seg["duration"]
+            else:
+                partial_text = " ".join(last_seg_words[: last_word_idx_in_seg + 1])
+                seg_start = last_seg["start"]
+                seg_end = seg_start + last_seg["duration"]
+
+                start_sample = int(seg_start * sample_rate)
+                end_sample = int(seg_end * sample_rate)
+                seg_audio = audio_waveform[:, start_sample:end_sample]
+
+                word_timestamps = align_segment(seg_audio, partial_text, "pan")
+                if word_timestamps:
+                    end_time = seg_start + word_timestamps[-1]["end"]
+                else:
+                    end_time = seg_end
+
+            start_ms = int(start_time * 1000)
+            end_ms = int(end_time * 1000)
+            clip = audio_pydub[start_ms:end_ms]
+            audio_filename = f"{base_name}_sentence_{sent_idx}.mp3"
+            audio_output_path = os.path.join(audio_output_dir, audio_filename)
+            clip.export(audio_output_path, format="mp3")
+
+            writer.writerow(
+                {
+                    "base_name": base_name,
+                    "sentence_id": sent_idx,
+                    "sentence_text": sentence,
+                    "audio_path": str(Path(audio_output_path).relative_to(output_dir)),
+                }
+            )
+            word_ptr += n_words
+
+
+def align_segment(audio_waveform, text_fragment, language):
+    """Run forced alignment on an audio segment"""
+    try:
+        alignment_model, alignment_tokenizer = load_alignment_model(device, dtype=dtype)
+
+        emissions, stride = generate_emissions(
+            alignment_model, audio_waveform, batch_size=16
+        )
+
+        tokens_starred, text_starred = preprocess_text(
+            text_fragment,
+            romanize=True,
+            language=language,
+        )
+
+        segments, scores, blank_token = get_alignments(
+            emissions, tokens_starred, alignment_tokenizer
+        )
+
+        spans = get_spans(tokens_starred, segments, blank_token)
+        return postprocess_results(text_starred, spans, stride, scores)
+    except Exception as e:
+        print(f"Alignment failed: {e}")
+        return []
+
+
+def datagen(input_dir, output_dir="data"):
+    with open(f"{input_dir}/download.txt", "r") as f:
+        for base_name in f:
+            base_name = base_name.strip()
+            if not base_name:
+                continue
+
+            print(f"Processing {base_name}...")
+            process_file(input_dir, base_name, output_dir=output_dir)
+            print(f"Completed {base_name}")
+
+
+if __name__ == "__main__":
+    input_dir = "downloader"
+    output_dir = "data"
+    datagen(input_dir, output_dir)
