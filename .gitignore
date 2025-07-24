@@ -16,3 +16,6 @@ data/
 model/
 
 .vscode/
+*temp/
+*mfa_temp/
+*mfa/

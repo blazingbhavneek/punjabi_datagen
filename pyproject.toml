@@ -7,7 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "black>=25.1.0",
     "cadence-punctuation>=1.0.4",
-    "ctc-forced-aligner",
     "ffmpeg>=1.4",
     "ffprobe>=0.5",
     "isort>=6.0.1",
@@ -15,6 +14,7 @@ dependencies = [
     "path>=17.1.0",
     "pydub>=0.25.1",
     "soundfile>=0.13.1",
+    "textgrid>=1.6.1",
     "torch>=2.7.1",
     "torchaudio>=2.7.1",
     "youtube-transcript-api>=1.2.0",
@@ -22,4 +22,3 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-ctc-forced-aligner = { git = "https://github.com/MahmoudAshraf97/ctc-forced-aligner.git" }
